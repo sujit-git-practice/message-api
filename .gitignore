@@ -42,3 +42,4 @@ out/
 ### Environment secrets ###
 env/.env
 
+env/env.dev
