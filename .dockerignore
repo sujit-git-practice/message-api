@@ -1,0 +1,15 @@
+.gradle
+.idea
+.kotlin
+build
+!build.gradle.kts
+*.iml
+out
+.git
+.gitignore
+.gitattributes
+HELP.md
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore

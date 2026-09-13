@@ -1,0 +1,75 @@
+name: Build and Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  GCP_REGION: us-central1
+  IMAGE_NAME: message-api
+  REPOSITORY: message-repo
+
+jobs:
+  build-and-push-dev:
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image-tag: ${{ github.sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/839526929428/locations/global/workloadIdentityPools/github/providers/github-provider
+          service_account: github-actions-message@gcp-gke-message.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Google Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push (dev)
+        run: |
+          IMAGE_TAG=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker build -t "$IMAGE_TAG" .
+          docker push "$IMAGE_TAG"
+
+  deploy-prod:
+    needs: build-and-push-dev
+    runs-on: ubuntu-latest
+    environment: prod   # requires manual approval via required reviewers configured on this environment
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Google Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Promote image to prod
+        run: |
+          SRC=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
+          DEST=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}-prod/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
+          docker pull "$SRC"
+          docker tag "$SRC" "$DEST"
+          docker push "$DEST"
