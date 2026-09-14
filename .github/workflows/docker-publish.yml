@@ -41,7 +41,9 @@ jobs:
 
       - name: Build and push (dev)
         run: |
-          IMAGE_TAG=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
+          test -n "$PROJECT_ID"
+          IMAGE_TAG=${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker build -t "$IMAGE_TAG" .
           docker push "$IMAGE_TAG"
 
@@ -68,8 +70,10 @@ jobs:
 
       - name: Promote image to prod
         run: |
-          SRC=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
-          DEST=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}-prod/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
+          PROJECT_ID="${GOOGLE_CLOUD_PROJECT:-${GCP_PROJECT:-${GCLOUD_PROJECT:-}}}"
+          test -n "$PROJECT_ID"
+          SRC=${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
+          DEST=${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPOSITORY }}-prod/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
           docker pull "$SRC"
           docker tag "$SRC" "$DEST"
           docker push "$DEST"
