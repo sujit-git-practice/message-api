@@ -72,6 +72,18 @@ jobs:
           location: ${{ env.GCP_REGION }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Get Runner IP
+        id: runner-ip
+        run: echo "ip=$(curl -s https://ipify.org)" >> $GITHUB_OUTPUT
+
+            # 2. Authorize the runner IP in GKE
+      - name: Authorize Runner IP
+        run: |
+          gcloud container clusters update ${{ env.GKE_CLUSTER }} \
+          --region ${{ env.GCP_REGION }} \
+          --enable-master-authorized-networks \
+          --master-authorized-networks "${{ steps.runner-ip.outputs.ip }}/32"
+
       - name: Deploy to GKE (dev) via Helm
         run: |
           helm upgrade --install message ${{ env.HELM_CHART_PATH }} \
