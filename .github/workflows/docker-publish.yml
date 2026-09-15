@@ -74,7 +74,7 @@ jobs:
 
       - name: Get Runner IP
         id: runner-ip
-        run: echo "ip=$(curl -s https://ipify.org)" >> $GITHUB_OUTPUT
+        run: echo "ip=$(curl -sL https://api.ipify.org)" >> $GITHUB_OUTPUT
 
             # 2. Authorize the runner IP in GKE
       - name: Authorize Runner IP
