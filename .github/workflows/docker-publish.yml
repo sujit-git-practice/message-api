@@ -1,14 +1,20 @@
-name: Build and Publish Docker Image
+name: Build, Push and Deploy to GKE
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch: {}
 
 env:
   GCP_REGION: europe-north1
   IMAGE_NAME: message-api
-  REPOSITORY: message-repo
+  # Must match the Artifact Registry repository_id created by the
+  # gcp-infra module.message_artifact_registry ("microservices").
+  REPOSITORY: microservices
+  GKE_CLUSTER: message-gke
+  K8S_REPO: sujit-git-practice/gcp-microservices-k8s
+  HELM_CHART_PATH: gcp-microservices-k8s/k8s/helm/message
 
 jobs:
   build-and-push-dev:
@@ -19,6 +25,7 @@ jobs:
       id-token: write
     outputs:
       image-tag: ${{ github.sha }}
+      image-repo: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -39,37 +46,92 @@ jobs:
       - name: Configure Docker for Google Artifact Registry
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
+      - name: Validate required secrets
+        run: |
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then
+            echo "::error::GCP_PROJECT_ID secret is not set. Add it under Settings > Secrets and variables > Actions (repository secret) or under the 'dev' environment secrets."
+            exit 1
+          fi
+
       - name: Build and push (dev)
         run: |
           IMAGE_TAG=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker build -t "$IMAGE_TAG" .
           docker push "$IMAGE_TAG"
 
-  deploy-prod:
-    needs: build-and-push-dev
-    runs-on: ubuntu-latest
-    environment: prod   # requires manual approval via required reviewers configured on this environment
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v2
+      - name: Checkout k8s manifests repo
+        uses: actions/checkout@v4
         with:
-          workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          repository: ${{ env.K8S_REPO }}
+          token: ${{ secrets.K8S_REPO_TOKEN }}
+          path: gcp-microservices-k8s
 
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Get GKE credentials (dev)
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GCP_REGION }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Configure Docker for Google Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - name: Promote image to prod
+      - name: Deploy to GKE (dev) via Helm
         run: |
-          SRC=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
-          DEST=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}-prod/${{ env.IMAGE_NAME }}:${{ needs.build-and-push-dev.outputs.image-tag }}
-          docker pull "$SRC"
-          docker tag "$SRC" "$DEST"
-          docker push "$DEST"
+          helm upgrade --install message ${{ env.HELM_CHART_PATH }} \
+            --namespace message-dev \
+            --create-namespace \
+            -f ${{ env.HELM_CHART_PATH }}/values.yaml \
+            -f ${{ env.HELM_CHART_PATH }}/values-dev.yaml \
+            --set image.repository=${{ env.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ github.sha }}
+
+  # deploy-prod:
+  #   needs: build-and-push-dev
+  #   runs-on: ubuntu-latest
+  #   environment: prod   # requires manual approval via required reviewers configured on this environment
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #   steps:
+  #     - name: Authenticate to Google Cloud
+  #       id: auth
+  #       uses: google-github-actions/auth@v2
+  #       with:
+  #         workload_identity_provider: ${{ secrets.WORKLOAD_IDENTITY_PROVIDER }}
+  #         service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+  #
+  #     - name: Set up Cloud SDK
+  #       uses: google-github-actions/setup-gcloud@v2
+  #
+  #     - name: Configure Docker for Google Artifact Registry
+  #       run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+  #
+  #     - name: Promote image to prod tag
+  #       run: |
+  #         SRC=${{ needs.build-and-push-dev.outputs.image-repo }}:${{ needs.build-and-push-dev.outputs.image-tag }}
+  #         DEST_SHA=${{ needs.build-and-push-dev.outputs.image-repo }}-prod:${{ needs.build-and-push-dev.outputs.image-tag }}
+  #         docker pull "$SRC"
+  #         docker tag "$SRC" "$DEST_SHA"
+  #         docker push "$DEST_SHA"
+  #
+  #     - name: Checkout k8s manifests repo
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: ${{ env.K8S_REPO }}
+  #         token: ${{ secrets.K8S_REPO_TOKEN }}
+  #         path: gcp-microservices-k8s
+  #
+  #     - name: Get GKE credentials (prod)
+  #       uses: google-github-actions/get-gke-credentials@v2
+  #       with:
+  #         cluster_name: ${{ env.GKE_CLUSTER }}-prod
+  #         location: ${{ env.GCP_REGION }}
+  #         project_id: ${{ secrets.GCP_PROJECT_ID_PROD || secrets.GCP_PROJECT_ID }}
+  #
+  #     - name: Deploy to GKE (prod) via Helm
+  #       run: |
+  #         helm upgrade --install message ${{ env.HELM_CHART_PATH }} \
+  #           --namespace message-prod \
+  #           --create-namespace \
+  #           -f ${{ env.HELM_CHART_PATH }}/values.yaml \
+  #           -f ${{ env.HELM_CHART_PATH }}/values-prod.yaml \
+  #           --set image.repository=${{ needs.build-and-push-dev.outputs.image-repo }}-prod \
+  #           --set image.tag=${{ needs.build-and-push-dev.outputs.image-tag }}
