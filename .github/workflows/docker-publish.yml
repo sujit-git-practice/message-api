@@ -63,7 +63,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.K8S_REPO }}
-          token: ${{ secrets.K8S_REPO_TOKEN }}
           path: gcp-microservices-k8s
 
       - name: Get GKE credentials (dev)
